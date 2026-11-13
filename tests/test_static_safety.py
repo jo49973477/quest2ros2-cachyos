@@ -59,6 +59,59 @@ class StaticSafetyTests(unittest.TestCase):
         self.assertIn("ALLOW_REAL_ROBOT=NO", script)
         self.assertIn("ur_real is running", script)
 
+    def test_calibration_overlay_is_pinned_and_checked_at_build_time(self):
+        dockerfile = (ROOT / "Dockerfile").read_text()
+        self.assertIn(
+            "UR_CALIBRATION_COMMIT=b8e342428839ca8bcc4a49caf25633a712f9cd2f",
+            dockerfile,
+        )
+        self.assertIn("grep -Fq 'pipeline.init();'", dockerfile)
+        self.assertIn("--packages-select ur_calibration", dockerfile)
+        self.assertIn(
+            "test \"$(ros2 pkg prefix ur_calibration)\" = "
+            "'/opt/ur_calibration_ws/install'",
+            dockerfile,
+        )
+
+    def test_entrypoint_prefers_calibration_overlay(self):
+        entrypoint = (ROOT / "scripts/entrypoint.sh").read_text()
+        ros_index = entrypoint.index("/opt/ros/humble/setup.bash")
+        quest_index = entrypoint.index("/opt/quest_ws/install/setup.bash")
+        calibration_index = entrypoint.index(
+            "/opt/ur_calibration_ws/install/setup.bash"
+        )
+        self.assertLess(ros_index, quest_index)
+        self.assertLess(quest_index, calibration_index)
+
+    def test_calibration_service_is_read_only_motion_wise(self):
+        compose = (ROOT / "compose.yaml").read_text()
+        runner = (ROOT / "scripts/run_ur_calibration.sh").read_text()
+        host_runner = (ROOT / "scripts/extract_ur_calibration.sh").read_text()
+        self.assertIn('ALLOW_REAL_ROBOT: "NO"', compose)
+        self.assertIn('ENABLE_SERVO_OUTPUT: "NO"', compose)
+        self.assertIn("calibration_correction.launch.py", runner)
+        self.assertNotIn("ur_control.launch.py", runner)
+        self.assertNotIn("start_servo", runner)
+        self.assertIn("timeout --signal=INT", runner)
+        self.assertIn("ros2 pkg prefix ur_calibration", runner)
+        self.assertIn("ur_real|ur_mock|ur_moveit|ur_target|ur_bridge", host_runner)
+        self.assertIn("^ALLOW_REAL_ROBOT=NO$", host_runner)
+        self.assertIn("^ENABLE_SERVO_OUTPUT=NO$", host_runner)
+
+    def test_robot_calibration_artifacts_are_ignored(self):
+        gitignore = (ROOT / ".gitignore").read_text()
+        self.assertIn(".env", gitignore.splitlines())
+        self.assertIn("bags/*.yaml", gitignore.splitlines())
+        self.assertIn("bags/*.log", gitignore.splitlines())
+        self.assertIn("config/ur_calibration.yaml", gitignore.splitlines())
+
+    def test_alias_node_does_not_replace_rclpy_read_only_properties(self):
+        alias_node = (ROOT / "scripts/alias_topics.py").read_text()
+        self.assertNotIn("self.subscriptions =", alias_node)
+        self.assertNotIn("self.publishers =", alias_node)
+        self.assertIn("self._alias_subscriptions", alias_node)
+        self.assertIn("self._alias_publishers", alias_node)
+
 
 if __name__ == "__main__":
     unittest.main()

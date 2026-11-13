@@ -32,6 +32,25 @@ services:
       - -p
       - ROS_TCP_PORT:=10000
 
+  # Read-only factory calibration extraction. This service never starts the
+  # UR hardware driver, ros2_control, MoveIt Servo, or External Control.
+  ur_calibration:
+    <<: *image
+    profiles: [calibration]
+    network_mode: host
+    ipc: host
+    environment:
+      <<: *ros-env
+      UR_IP: ${UR_IP:-}
+      ALLOW_REAL_ROBOT: "NO"
+      ENABLE_SERVO_OUTPUT: "NO"
+      CALIBRATION_TIMEOUT: ${CALIBRATION_TIMEOUT:-45}
+    volumes:
+      - ./bags:/bags
+      - ./config:/config
+    restart: "no"
+    command: [/opt/quest-tools/run_ur_calibration.sh]
+
   # Optional compatibility relay: /right_hand/pose -> /q2r_right_hand_pose etc.
   # Start only if the Quest app publishes the newer slash-style topic names.
   q2r_alias:

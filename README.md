@@ -150,6 +150,51 @@ UR10과 통신하지 않는다. 하지만 ROS 드라이버가 성공적으로 �
 
 ## 6. 실제 UR10 연결 (명시적 승인 후)
 
+### 공장 캘리브레이션 추출(움직임 없음)
+
+ROS 2 Humble의 `ur_calibration` 2.15.0에는 Primary Interface pipeline을
+초기화하지 않고 실행하는 버그가 있다. 이 이미지는 Universal Robots의
+수정 커밋 `b8e342428839ca8bcc4a49caf25633a712f9cd2f`에서
+`ur_calibration` 패키지만 빌드해 `/opt/ur_calibration_ws` overlay로 올린다.
+APT의 UR 드라이버·MoveIt 패키지는 그대로 유지한다. Docker entrypoint는
+이 overlay를 마지막에 source하므로 이미지 재생성 뒤에도 수정본이 우선한다.
+
+캘리브레이션 서비스는 Primary Interface `30001/TCP`에서 공장 데이터를
+읽을 뿐 `ur_control`, `ros2_control`, MoveIt Servo 또는 External Control을
+시작하지 않는다. 실행 전 `.env`의 다음 값은 반드시 그대로 유지한다.
+
+```ini
+ALLOW_REAL_ROBOT=NO
+ENABLE_SERVO_OUTPUT=NO
+```
+
+CachyOS와 Fish shell에서도 아래 스크립트 하나만 실행하면 된다. 스크립트는
+Compose 검사 → 이미지 빌드 → 수정 overlay/포트 확인 → 45초 timeout을 건
+추출 → YAML/hash 검증 → 두 위치에 저장까지 수행한다.
+
+```fish
+./scripts/extract_ur_calibration.sh 192.168.2.3
+```
+
+성공 결과:
+
+- `bags/ur_calibration.yaml`: 원본 보관용
+- `config/ur_calibration.yaml`: `ur_real`의 읽기 전용 입력
+- `bags/ur_calibration.log`: 추출 및 진단 로그
+
+세 파일 중 로봇별 YAML과 로그는 Git에서 제외된다. 빌드는 고정된 upstream
+SHA와 소스의 `pipeline.init();`를 확인하며, 실행 시에도 다음을 다시 검사한다.
+
+```bash
+docker compose run --rm --no-deps q2r_endpoint \
+  bash -lc 'ros2 pkg prefix ur_calibration; cat /opt/ur_calibration_ws/UPSTREAM_COMMIT'
+```
+
+정상 prefix는 `/opt/ur_calibration_ws/install`이다. `Primary Interface ...
+unavailable`이면 IP/30001을, `Wrong ur_calibration prefix`이면 entrypoint overlay를,
+timeout이면 Primary Interface 데이터 수신 및 PolyScope/펌웨어 호환성을 먼저
+확인한다. 실패 파일은 유효한 캘리브레이션으로 복사하지 않는다.
+
 ### 네트워크 준비
 
 - UR 컨트롤러 PolyScope에서 UR10(CB) 또는 UR10e 모델과 **로봇 IP** 확인.

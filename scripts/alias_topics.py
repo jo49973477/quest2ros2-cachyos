@@ -15,8 +15,10 @@ from quest2ros.msg import OVR2ROSInputs
 class AliasTopics(Node):
     def __init__(self):
         super().__init__('quest_topic_aliases')
-        self.subscriptions = []
-        self.publishers = []
+        # rclpy.node.Node exposes read-only subscriptions/publishers
+        # properties, so keep our references under private, non-reserved names.
+        self._alias_subscriptions = []
+        self._alias_publishers = []
         for side in ('left', 'right'):
             for field, typ in (
                 ('pose', PoseStamped),
@@ -29,8 +31,8 @@ class AliasTopics(Node):
                 sub = self.create_subscription(
                     typ, original, lambda msg, publisher=pub: publisher.publish(msg), 10
                 )
-                self.publishers.append(pub)
-                self.subscriptions.append(sub)
+                self._alias_publishers.append(pub)
+                self._alias_subscriptions.append(sub)
                 self.get_logger().info(f'{original} -> {aliased}')
 
 

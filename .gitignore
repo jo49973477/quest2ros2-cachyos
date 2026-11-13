@@ -1,0 +1,6 @@
+.env
+bags/*.yaml
+bags/*.log
+config/ur_calibration.yaml
+**/__pycache__/
+*.py[cod]

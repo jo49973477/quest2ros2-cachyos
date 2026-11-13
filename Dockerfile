@@ -13,8 +13,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # Includes the official Universal Robots ROS 2 driver and a mock-only,
 # fail-closed Quest-pose-to-MoveIt-Servo adapter copied below.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git ca-certificates bash iproute2 iputils-ping netcat-openbsd \
-    python3-numpy python3-colcon-common-extensions \
+    git ca-certificates bash build-essential iproute2 iputils-ping netcat-openbsd \
+    python3-numpy python3-yaml python3-colcon-common-extensions \
     ros-humble-rosidl-default-generators \
     ros-humble-geometry-msgs ros-humble-visualization-msgs \
     ros-humble-control-msgs ros-humble-tf2-ros \
@@ -24,6 +24,32 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-ur \
     ros-humble-moveit-servo ros-humble-ur-moveit-config \
     && rm -rf /var/lib/apt/lists/*
+
+# Humble ur_calibration 2.15.0 starts the primary-interface pipeline without
+# initializing it. Pin the upstream backport instead of waiting for an APT
+# rebuild. Only ur_calibration is overlaid; the binary UR driver and MoveIt
+# packages remain supplied by ros-humble-ur.
+ARG UR_DRIVER_REPOSITORY=https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver.git
+ARG UR_CALIBRATION_COMMIT=b8e342428839ca8bcc4a49caf25633a712f9cd2f
+ENV UR_CALIBRATION_OVERLAY=/opt/ur_calibration_ws
+WORKDIR /opt/ur_calibration_ws/src/Universal_Robots_ROS2_Driver
+RUN git init && \
+    git remote add origin "${UR_DRIVER_REPOSITORY}" && \
+    git sparse-checkout init --cone && \
+    git sparse-checkout set ur_calibration && \
+    git fetch --depth 1 origin "${UR_CALIBRATION_COMMIT}" && \
+    git checkout --detach FETCH_HEAD && \
+    test "$(git rev-parse HEAD)" = "${UR_CALIBRATION_COMMIT}" && \
+    grep -Fq 'pipeline.init();' ur_calibration/src/calibration_correction.cpp && \
+    printf '%s\n' "${UR_CALIBRATION_COMMIT}" > /opt/ur_calibration_ws/UPSTREAM_COMMIT && \
+    source /opt/ros/humble/setup.bash && \
+    cd /opt/ur_calibration_ws && \
+    colcon build --merge-install --packages-select ur_calibration \
+      --event-handlers console_direct+ --cmake-args -DBUILD_TESTING=OFF && \
+    source install/setup.bash && \
+    test "$(ros2 pkg prefix ur_calibration)" = '/opt/ur_calibration_ws/install' && \
+    test -x install/lib/ur_calibration/calibration_correction && \
+    rm -rf build log src/Universal_Robots_ROS2_Driver/.git
 
 COPY scripts/fix_tcp_sender.py /opt/quest-tools/fix_tcp_sender.py
 
@@ -54,6 +80,7 @@ RUN mkdir -p src && \
     ros2 pkg prefix ros_tcp_endpoint
 
 COPY scripts/entrypoint.sh scripts/launch_real_ur.sh \
+     scripts/run_ur_calibration.sh scripts/extract_ur_calibration.sh \
      scripts/alias_topics.py scripts/quest_target_node.py \
      scripts/pose_to_twist_bridge.py scripts/teleop_math.py \
      scripts/ur10_jacobian.py scripts/check_mock_servo.sh \
@@ -63,6 +90,8 @@ COPY config/ur10_mock_initial_positions.yaml \
      /opt/quest-tools/ur10_mock_initial_positions.yaml
 RUN chmod +x /opt/quest-tools/entrypoint.sh \
     /opt/quest-tools/launch_real_ur.sh \
+    /opt/quest-tools/run_ur_calibration.sh \
+    /opt/quest-tools/extract_ur_calibration.sh \
     /opt/quest-tools/check_mock_servo.sh \
     /opt/quest-tools/ur10_jacobian.py \
     /opt/quest-tools/mock_servo_integration_test.py \
