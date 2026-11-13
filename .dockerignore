@@ -1,0 +1,8 @@
+# Send only files explicitly consumed by Dockerfile. This prevents local
+# credentials, .env values, bags and editor/agent metadata entering context.
+**
+!Dockerfile
+!scripts/
+!scripts/**
+!config/
+!config/**

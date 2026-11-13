@@ -1,0 +1,140 @@
+name: quest2ros2-ur10
+
+# Linux host networking: Quest connects to CachyOS LAN IP, not Docker bridge IP.
+x-image: &image
+  image: quest2ros2-humble:local
+  build:
+    context: .
+    dockerfile: Dockerfile
+
+x-ros-env: &ros-env
+  ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-30}
+  ROS_LOCALHOST_ONLY: "0"
+  RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+
+services:
+  q2r_endpoint:
+    <<: *image
+    network_mode: host
+    ipc: host
+    environment: *ros-env
+    volumes:
+      - ./bags:/bags
+    restart: unless-stopped
+    command:
+      - ros2
+      - run
+      - ros_tcp_endpoint
+      - default_server_endpoint
+      - --ros-args
+      - -p
+      - ROS_IP:=0.0.0.0
+      - -p
+      - ROS_TCP_PORT:=10000
+
+  # Optional compatibility relay: /right_hand/pose -> /q2r_right_hand_pose etc.
+  # Start only if the Quest app publishes the newer slash-style topic names.
+  q2r_alias:
+    <<: *image
+    profiles: [compat]
+    network_mode: host
+    ipc: host
+    environment: *ros-env
+    restart: unless-stopped
+    command: [python3, /opt/quest-tools/alias_topics.py]
+
+  # Optional fake UR10: no physical robot is contacted.
+  ur_mock:
+    <<: *image
+    profiles: [mock]
+    network_mode: host
+    ipc: host
+    environment:
+      <<: *ros-env
+      Q2R_MOCK_HARDWARE: "YES"
+      ALLOW_REAL_ROBOT: "NO"
+    volumes:
+      # Avoid the UR default wrist/elbow singularity at Servo startup.
+      - ./config/ur10_mock_initial_positions.yaml:/opt/ros/humble/share/ur_description/config/initial_positions.yaml:ro
+    restart: "no"
+    command:
+      - ros2
+      - launch
+      - ur_robot_driver
+      - ur_control.launch.py
+      - ur_type:=${UR_TYPE:-ur10}
+      - robot_ip:=127.0.0.1
+      # ROS 2 Humble's UR driver calls this launch argument "fake", not "mock".
+      - use_fake_hardware:=true
+      # Servo publishes directly to this controller, so activate it at startup.
+      - initial_joint_controller:=forward_position_controller
+      - launch_rviz:=false
+
+  # Explicit opt-in only. Driver starts, but no Quest->robot motion bridge is started.
+  ur_real:
+    <<: *image
+    profiles: [robot]
+    network_mode: host
+    ipc: host
+    environment:
+      <<: *ros-env
+      UR_TYPE: ${UR_TYPE:-ur10}
+      UR_IP: ${UR_IP:-}
+      UR_CALIBRATION_FILE: ${UR_CALIBRATION_FILE:-/config/ur_calibration.yaml}
+      ALLOW_REAL_ROBOT: ${ALLOW_REAL_ROBOT:-NO}
+    volumes:
+      - ./config:/config:ro
+    restart: "no"
+    command: [/opt/quest-tools/launch_real_ur.sh]
+
+  # Stage 1: Servo and MoveIt for mock hardware only.
+  # It is a separate process from ur_mock; launch only after mock works.
+  ur_moveit:
+    <<: *image
+    profiles: [servo]
+    network_mode: host
+    ipc: host
+    environment: *ros-env
+    restart: "no"
+    command:
+      - ros2
+      - launch
+      - ur_moveit_config
+      - ur_moveit.launch.py
+      - ur_type:=${UR_TYPE:-ur10}
+      - launch_servo:=true
+      - launch_rviz:=false
+
+  # Stage 2: Calibrated Quest pose target generation.
+  # Its pose gate starts DISABLED; button_lower anchors/calibrates and toggles it.
+  ur_target:
+    <<: *image
+    profiles: [teleop]
+    network_mode: host
+    ipc: host
+    environment:
+      <<: *ros-env
+      VR_POSITION_SCALE: ${VR_POSITION_SCALE:-1.0}
+      QUEST_FILTER_WINDOW: ${QUEST_FILTER_WINDOW:-6}
+      # Empty means calibrate from controller/tool orientation at button_lower.
+      VR_TO_ROBOT_ROTATION: ${VR_TO_ROBOT_ROTATION:-}
+    restart: "no"
+    command: [python3, /opt/quest-tools/quest_target_node.py]
+
+  # Stage 3: Safe by default: only publishes a PREVIEW twist topic.
+  # Never point this output at a real robot before calibrating & validating.
+  ur_bridge:
+    <<: *image
+    profiles: [teleop]
+    network_mode: host
+    ipc: host
+    environment:
+      <<: *ros-env
+      ENABLE_SERVO_OUTPUT: ${ENABLE_SERVO_OUTPUT:-NO}
+      ENABLE_ANGULAR_SERVO: ${ENABLE_ANGULAR_SERVO:-YES}
+      TELEOP_INPUT_TIMEOUT: ${TELEOP_INPUT_TIMEOUT:-0.25}
+      TELEOP_TF_TIMEOUT: ${TELEOP_TF_TIMEOUT:-0.50}
+      MAX_LINEAR_SPEED: ${MAX_LINEAR_SPEED:-0.025}
+      MAX_ANGULAR_SPEED: ${MAX_ANGULAR_SPEED:-0.10}
+    restart: "no"
+    command: [python3, /opt/quest-tools/pose_to_twist_bridge.py]
